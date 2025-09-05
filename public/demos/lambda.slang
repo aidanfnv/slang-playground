@@ -7,7 +7,7 @@ import playground;
 
 public struct MyData
 {
-    int data[4];
+    public int data[4];
     MyData map(IFunc<int, int> f)
     {
         MyData result;
