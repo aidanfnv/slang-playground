@@ -8,18 +8,17 @@ import { RenderCanvas } from 'playground-render-canvas';
 import 'playground-render-canvas/dist/playground-render-canvas.css';
 import { UniformPanel } from 'playground-uniform-panel';
 import 'playground-uniform-panel/dist/playground-uniform-panel.css';
-import { compiler, checkShaderType, slangd, moduleLoadingMessage } from './try-slang'
+import { compiler, slangd, moduleLoadingMessage } from './try-slang'
 import { computed, defineAsyncComponent, onBeforeMount, onMounted, ref, shallowRef, useTemplateRef, watch, type Ref } from 'vue'
 import { isWholeProgramTarget, compilePlayground } from 'slang-compilation-engine'
 import { demoList } from './demo-list'
 import { compressToBase64URL, decompressFromBase64URL, isWebGPUSupported } from './util'
-import type { ThreadGroupSize } from './slang-wasm'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
 import ReflectionView from './components/ReflectionView.vue'
 import { useWindowSize } from '@vueuse/core'
 import { default as spirvTools } from "./spirv-tools.js";
-import { type Result, type Shader, type ReflectionJSON, type RunnableShaderType, type ShaderType, type CallCommand, type HashedStringData, type ResourceCommand, type UniformController, isControllerRendered } from 'slang-playground-shared'
+import { type Result, type Shader, type UniformController, isControllerRendered } from 'slang-playground-shared'
 
 // MonacoEditor is a big component, so we load it asynchronously.
 const MonacoEditor = defineAsyncComponent(() => import('./components/MonacoEditor.vue'))
@@ -80,7 +79,10 @@ watch(diagnosticsText, (newText, _) => {
 })
 const device = shallowRef<GPUDevice | null>(null);
 
-const currentDisplayMode = ref<ShaderType>("imageMain");
+const imageOutputDisplayed = ref<boolean>(false);
+const printOutputDisplayed = ref<boolean>(false);
+const shaderRunning = ref<boolean>(false);
+
 const uniformComponents = ref<UniformController[]>([])
 const areAnyUniformsRendered = computed(() => uniformComponents.value.filter(isControllerRendered).length > 0);
 
@@ -169,12 +171,12 @@ onMounted(async () => {
     document.addEventListener('keydown', function (event) {
         if (event.key === 'F5') {
             event.preventDefault();
-            compileOrRun();
+            doRun(false);
         }
         else if (event.ctrlKey && event.key === 'b') {
             event.preventDefault();
             // Your custom code here
-            onCompile();
+            doRun(true);
         }
     });
 })
@@ -219,7 +221,7 @@ function loadDemo(selectedDemoURL: string) {
             .then((data) => {
                 codeEditor.value?.setEditorValue(data);
                 updateEntryPointOptions();
-                compileOrRun();
+                doRun(false);
             });
     }
 }
@@ -242,63 +244,62 @@ function updateEntryPointOptions() {
         selectedEntrypoint.value = entrypoints.value[0];
 }
 
-function compileOrRun() {
-    const userSource = codeEditor.value!.getValue();
-    const shaderType = checkShaderType(userSource);
+async function doRun(forceCompile: boolean) {
+    if (compiler == null) throw new Error("Compiler doesn't exist");
 
-    if (shaderType == null) {
-        onCompile();
-    }
-    else {
-        if (device.value == null) {
-            onCompile().then(() => {
-                if (diagnosticsText.value == "")
-                    diagnosticsText.value += `The shader compiled successfully, ` +
-                        `but it cannot run because your browser does not support WebGPU.\n` +
-                        `WebGPU is supported in Chrome, Edge, Firefox Nightly and Safari Technology Preview. ` +
-                        `On iOS, WebGPU support requires Safari 16.4 or later and must be enabled in settings. ` +
-                        `Please check your browser version and enable WebGPU if possible.`;
-            });
-        }
-        else {
-            doRun();
-        }
-    }
-}
-
-async function doRun() {
     smallScreenEditorVisible.value = false;
     diagnosticsText.value = "";
+    imageOutputDisplayed.value = false;
+    printOutputDisplayed.value = false;
+    shaderRunning.value = false;
 
     if (!renderCanvas.value) {
         throw new Error("WebGPU is not supported in this browser");
     }
     const userSource = codeEditor.value!.getValue()
+    const compileTarget = forceCompile ? targetSelect.value!.getValue() : "WGSL";
+    const entryPoint = forceCompile ? selectedEntrypoint.value : null;
 
-    // We will have some restrictions on runnable shader, the user code has to define imageMain or printMain function.
-    // We will do a pre-filter on the user input source code, if it's not runnable, we will not run it.
-    const shaderType = checkShaderType(userSource);
-    if (shaderType == null) {
-        toggleDisplayMode(null);
-        codeGenArea.value?.setEditorValue("");
-        throw new Error("Error: In order to run the shader, please define either imageMain or printMain function in the shader code.");
-    }
+    if (compileTarget == "SPIRV")
+        await compiler.initSpirvTools(spirvTools);
 
-    const entryPointName = shaderType;
-    const compilationResult = await compileShader(userSource, entryPointName, "WGSL", false);
+    // Todo: Readd working entrypoint selection
+    const compilationResult = await compileShader(userSource, entryPoint, compileTarget);
 
     if (compilationResult.succ == false) {
         // compileShader takes care of diagnostics already, so they aren't added here
-        toggleDisplayMode(null);
         return;
     }
 
-    const compiledPlaygroundResult = compilePlayground(compilationResult.result, window.location.href + 'user.slang', shaderType);
+    if (forceCompile) {
+        return;
+    }
+
+    let isRunnable = false;
+    for (let parameter of compilationResult.result.reflection.parameters) {
+        if (["outputTexture", "g_printedBuffer"].includes(parameter.name)) {
+            isRunnable = true;
+        }
+    }
+
+    if (!isRunnable) {
+        return;
+    }
+
+    if(device.value == null) {
+        if (diagnosticsText.value == "")
+            diagnosticsText.value += `The shader compiled successfully, ` +
+                `but it cannot run because your browser does not support WebGPU.\n` +
+                `WebGPU is supported in Chrome, Edge, Firefox Nightly and Safari Technology Preview. ` +
+                `On iOS, WebGPU support requires Safari 16.4 or later and must be enabled in settings. ` +
+                `Please check your browser version and enable WebGPU if possible.`;
+        return;
+    }
+    const compiledPlaygroundResult = compilePlayground(compilationResult.result, window.location.href + 'user.slang');
 
     if (compiledPlaygroundResult.succ == false) {
-        toggleDisplayMode(null);
         diagnosticsText.value += compiledPlaygroundResult.message;
-        if(compiledPlaygroundResult.log) {
+        if (compiledPlaygroundResult.log) {
             diagnosticsText.value += "\n" + compiledPlaygroundResult.log;
         }
         return;
@@ -311,54 +312,29 @@ async function doRun() {
     if (areAnyUniformsRendered.value) {
         tabContainer.value?.setActiveTab("uniforms")
     }
-    toggleDisplayMode(shaderType);
-
+    for (let outputType of compiledPlayground.outputTypes) {
+        if (outputType == "image") {
+            imageOutputDisplayed.value = true;
+        } else if (outputType == "printing") {
+            printOutputDisplayed.value = true;
+            tabContainer.value?.setActiveTab("output")
+        }
+    }
+    shaderRunning.value = true;
     renderCanvas.value.onRun(compiledPlayground);
 }
 
-// For the compile button action, we don't have restriction on user code that it has to define imageMain or printMain function.
-// But if it doesn't define any of them, then user code has to define a entry point function name. Because our built-in shader
-// have no way to call the user defined function, and compile engine cannot compile the source code.
-async function onCompile() {
-    smallScreenEditorVisible.value = false;
-    diagnosticsText.value = "";
-
-    toggleDisplayMode(null);
-    const compileTarget = targetSelect.value!.getValue();
-
-    await updateEntryPointOptions();
-
-    if (selectedEntrypoint.value == "" && !isWholeProgramTarget(compileTarget)) {
-        diagnosticsText.value = "Please select the entry point name";
-        return;
-    }
-
-    if (compiler == null) throw new Error("Compiler doesn't exist");
-
-    if (compileTarget == "SPIRV")
-        await compiler.initSpirvTools(spirvTools);
-
-    // compile the compute shader code from input text area
-    const userSource = codeEditor.value!.getValue();
-    compileShader(userSource, selectedEntrypoint.value, compileTarget, true);
-}
-
-function toggleDisplayMode(displayMode: ShaderType) {
-    currentDisplayMode.value = displayMode;
-}
-
-async function compileShader(userSource: string, entryPoint: string, compileTarget: typeof compileTargets[number], noWebGPU: boolean): Promise<Result<Shader>> {
+async function compileShader(userSource: string, entryPoint: string | null, compileTarget: typeof compileTargets[number]): Promise<Result<Shader>> {
     if (compiler == null) throw new Error("No compiler available");
     const compiledResult = await compiler.compile({
         target: compileTarget,
         entrypoint: entryPoint,
         sourceCode: userSource,
         shaderPath: '/user.slang',
-        noWebGPU,
     }, '/user.slang', [], spirvTools);
     if (compiledResult.succ == false) {
         diagnosticsText.value += compiledResult.message;
-        if(compiledResult.log) {
+        if (compiledResult.log) {
             diagnosticsText.value += "\n" + compiledResult.log;
         }
         codeGenArea.value?.setEditorValue('Compilation returned empty result.');
@@ -406,7 +382,7 @@ function restoreFromURL(): boolean {
         decompressFromBase64URL(code).then((decompressed) => {
             codeEditor.value!.setEditorValue(decompressed);
             updateEntryPointOptions();
-            compileOrRun();
+            doRun(false);
         });
         gotCodeFromUrl = true;
     }
@@ -425,7 +401,7 @@ async function runIfFullyInitialized() {
         } else if (codeEditor.value.getValue() == "") {
             loadDemo(defaultShaderURL);
         } else {
-            compileOrRun();
+            doRun(false);
         }
     }
 }
@@ -458,7 +434,7 @@ function logError(message: string) {
             </Pane>
             <Pane class="rightContainer">
                 <Splitpanes horizontal class="resultSpace">
-                    <Pane class="outputSpace" size="69" v-if="device != null" v-show="currentDisplayMode != null">
+                    <Pane id="big-screen-display" size="69" v-if="device != null" v-show="imageOutputDisplayed">
                     </Pane>
                     <Pane class="codeGenSpace">
                     </Pane>
@@ -468,7 +444,7 @@ function logError(message: string) {
         <div id="small-screen-container" v-show="isSmallScreen">
             <div id="small-screen-navbar"></div>
             <Splitpanes horizontal class="resultSpace slang-theme" v-show="!smallScreenEditorVisible">
-                <Pane id="small-screen-display" size="69" v-if="device != null" v-show="currentDisplayMode != null">
+                <Pane id="small-screen-display" size="69" v-if="device != null" v-show="imageOutputDisplayed">
                 </Pane>
                 <Pane id="small-screen-code-gen"></Pane>
             </Splitpanes>
@@ -498,14 +474,14 @@ function logError(message: string) {
                 <!-- Run section -->
                 <div class="navbar-run navbar-item">
                     <button :disabled="device == null"
-                        :title="device == null ? `Run shader feature is disabled because the current browser does not support WebGPU.` : `(F5) Compile and run the shader that provides either 'printMain' or 'imageMain'.);`"
-                        @click="doRun()">&#9658;
+                        :title="device == null ? `Run shader feature is disabled because the current browser does not support WebGPU.` : `(F5) Compile and run the shader that uses either printing or rendering.);`"
+                        @click="doRun(false)">&#9658;
                         Run</button>
                 </div>
 
                 <!-- Entry/Compile section -->
                 <div class="navbar-compile navbar-item">
-                    <Selector :options="compileTargets" modelValue="SPIRV" name="target" aria-label="target"
+                    <Selector :options="compileTargets" model-value="WGSL" name="target" aria-label="target"
                         ref="targetSelect" @change="updateProfileOptions"></Selector>
 
                     <select class="dropdown-select" name="profile" aria-label="profile" v-model="selectedProfile"
@@ -524,7 +500,7 @@ function logError(message: string) {
 
                     <button id="compile-btn"
                         title='(Ctrl+B) Compile the shader to the selected target. Entrypoints needs to be marked with the `[shader("stage")]` attribute.'
-                        @click="onCompile()">
+                        @click="doRun(true)">
                         Compile
                     </button>
                 </div>
@@ -559,13 +535,11 @@ function logError(message: string) {
                 </div>
             </div>
         </Teleport>
-        <Teleport defer :to="isSmallScreen ? '#small-screen-display' : '.outputSpace'" v-if="device != null">
-            <div id="renderOutput" v-show="currentDisplayMode == 'imageMain'">
-                <RenderCanvas :device="device" :show-fullscreen-toggle="true" @log-error="logError" @log-output="(log) => { printedText = log }"
-                    ref="renderCanvas"></RenderCanvas>
+        <Teleport defer :to="isSmallScreen ? '#small-screen-display' : '#big-screen-display'" v-if="device != null">
+            <div id="renderOutput" v-show="imageOutputDisplayed">
+                <RenderCanvas :device="device" :show-fullscreen-toggle="true" @log-error="logError"
+                    @log-output="(log) => { printedText = log }" ref="renderCanvas"></RenderCanvas>
             </div>
-            <textarea readonly class="printSpace outputSpace"
-                v-show="currentDisplayMode == 'printMain'">{{ printedText }}</textarea>
         </Teleport>
         <Teleport v-if="pageLoaded" defer :to="isSmallScreen ? '#small-screen-code-gen' : '.codeGenSpace'">
             <TabContainer ref="tabContainer">
@@ -578,12 +552,16 @@ function logError(message: string) {
                 </Tab>
 
                 <Tab name="uniforms" label="Uniforms"
-                    v-if="currentDisplayMode == 'imageMain' && areAnyUniformsRendered">
-                    <UniformPanel :uniformComponents="uniformComponents"/>
+                    v-if="shaderRunning && areAnyUniformsRendered">
+                    <UniformPanel :uniformComponents="uniformComponents" />
                 </Tab>
 
                 <Tab name="diagnostics" label="Diagnostics" v-if="diagnosticsText != ''">
                     <textarea readonly class="diagnosticSpace outputSpace">{{ diagnosticsText }}</textarea>
+                </Tab>
+
+                <Tab name="output" label="Output" v-if="printOutputDisplayed">
+                    <textarea readonly class="printSpace outputSpace">{{ printedText }}</textarea>
                 </Tab>
             </TabContainer>
         </Teleport>
@@ -626,7 +604,7 @@ function logError(message: string) {
 }
 
 .printSpace {
-    margin-top: 10px;
+    padding: 5px;
 }
 
 .diagnosticSpace {

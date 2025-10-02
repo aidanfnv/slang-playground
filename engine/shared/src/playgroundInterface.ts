@@ -4,10 +4,9 @@ export type CompileTarget = 'SPIRV' | 'HLSL' | 'GLSL' | 'METAL' | 'WGSL' | 'CUDA
 
 export type CompileRequest = {
 	target: CompileTarget,
-	entrypoint: string,
+	entrypoint: string | null,
 	sourceCode: string,
 	shaderPath: string,
-	noWebGPU: boolean,
 }
 
 export type EntrypointsRequest = {
@@ -93,7 +92,6 @@ export type EntrypointsResult = string[]
 
 export type Shader = {
 	code: string,
-	layout: Bindings,
 	hashedStrings: HashedStringData,
 	reflection: ReflectionJSON,
 	threadGroupSizes: { [key: string]: [number, number, number] },
@@ -125,17 +123,16 @@ export type UniformController = { buffer_offset: number } & ({
 	scalarType: ScalarType,
 })
 
-export type RunnableShaderType = 'imageMain' | 'printMain';
-export type ShaderType = RunnableShaderType | null;
-
+export type OutputType = "printing" | "image";
 export type CompiledPlayground = {
 	uri: string,
 	shader: Shader,
-	mainEntryPoint: RunnableShaderType,
 	resourceCommands: ResourceCommand[],
 	callCommands: CallCommand[],
 	uniformSize: number,
 	uniformComponents: UniformController[],
+	layout: Bindings,
+	outputTypes: OutputType[],
 }
 
 export type PlaygroundMessage = {
