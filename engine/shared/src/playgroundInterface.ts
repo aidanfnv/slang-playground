@@ -58,6 +58,11 @@ export type ReflectionType = {
 	"access"?: "readWrite" | "write",
 	"resultType": ReflectionType,
 } | {
+	"kind": "resource",
+	"baseShape": "texture3D",
+	"access"?: "readWrite" | "write",
+	"resultType": ReflectionType,
+} | {
 	"kind": "samplerState",
 };
 
@@ -157,6 +162,11 @@ export type ParsedCommand = {
 	"type": "BLACK",
 	"width": number,
 	"height": number,
+} | {
+	"type": "BLACK_3D",
+	"width": number,
+	"height": number,
+	"depth": number,
 } | {
 	"type": "BLACK_SCREEN",
 	"width_scale": number,

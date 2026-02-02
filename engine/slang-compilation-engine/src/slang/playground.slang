@@ -5,7 +5,7 @@ public struct playground_ZEROSAttribute
     int count;
 };
 
-// Initialize a \`float\` texture with zeros of the provided size.
+// Initialize a texture with zeros of the provided size.
 [__AttributeUsage(_AttributeTargets.Var)]
 public struct playground_BLACKAttribute
 {
@@ -13,7 +13,16 @@ public struct playground_BLACKAttribute
     int height;
 };
 
-// Initialize a \`float\` texture with zeros of a size proportional to the screen size.
+// Initialize a 3D texture with zeros of the provided size.
+[__AttributeUsage(_AttributeTargets.Var)]
+public struct playground_BLACK_3DAttribute
+{
+    int width;
+    int height;
+    int depth;
+};
+
+// Initialize a texture with zeros of a size proportional to the screen size.
 [__AttributeUsage(_AttributeTargets.Var)]
 public struct playground_BLACK_SCREENAttribute
 {
