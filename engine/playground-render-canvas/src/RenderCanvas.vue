@@ -305,19 +305,25 @@ function configContext(device: GPUDevice) {
     return context;
 }
 
+function sanitizeMouseValue(value: number) {
+    return Number.isFinite(value) ? value : 0;
+}
+
 function mousedown(event: MouseEvent) {
-    canvasLastMouseDownPos.x = event.offsetX;
-    canvasLastMouseDownPos.y = event.offsetY;
-    canvasCurrentMousePos.x = event.offsetX;
-    canvasCurrentMousePos.y = event.offsetY;
+    const safeX = sanitizeMouseValue(event.offsetX);
+    const safeY = sanitizeMouseValue(event.offsetY);
+    canvasLastMouseDownPos.x = safeX;
+    canvasLastMouseDownPos.y = safeY;
+    canvasCurrentMousePos.x = safeX;
+    canvasCurrentMousePos.y = safeY;
     canvasMouseClicked = true;
     canvasIsMouseDown = true;
 }
 
 function mousemove(event: MouseEvent) {
     if (canvasIsMouseDown) {
-        canvasCurrentMousePos.x = event.offsetX;
-        canvasCurrentMousePos.y = event.offsetY;
+        canvasCurrentMousePos.x = sanitizeMouseValue(event.offsetX);
+        canvasCurrentMousePos.y = sanitizeMouseValue(event.offsetY);
     }
 }
 
@@ -570,11 +576,13 @@ function writeUniformData(uniformInput: GPUBuffer, uniformComponents: UniformCon
                 throw new Error(`scalar type not supported for ${uniformComponent.type} uniform`);
             }
         } else if (uniformComponent.type == "MOUSE_POSITION") {
+            const lastMouseDownX = sanitizeMouseValue(canvasLastMouseDownPos.x);
+            const lastMouseDownY = sanitizeMouseValue(canvasLastMouseDownPos.y);
             let data = [
-                canvasCurrentMousePos.x,
-                canvasCurrentMousePos.y,
-                canvasLastMouseDownPos.x * (canvasIsMouseDown ? -1 : 1),
-                canvasLastMouseDownPos.y * (canvasMouseClicked ? -1 : 1),
+                sanitizeMouseValue(canvasCurrentMousePos.x),
+                sanitizeMouseValue(canvasCurrentMousePos.y),
+                lastMouseDownX * (canvasIsMouseDown ? -1 : 1),
+                lastMouseDownY * (canvasMouseClicked ? -1 : 1),
             ];
             for (let i = 0; i < data.length; i++) {
                 if(!writeScalar(uniformBufferView, uniformComponent.scalarType, offset + i * getScalarSize(uniformComponent.scalarType) / 8, data[i])) {
